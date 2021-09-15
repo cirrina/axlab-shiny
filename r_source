@@ -1,0 +1,437 @@
+
+
+## COMMON SOURCE FOR ALL SHINY KIDNEY APPS
+   ## Based on R_ccpRCC_2019_SOURCE.R # 2020-05-12
+
+
+## ==============================
+#        SOURCE CODE
+## ==============================
+
+require(dlfoo2)
+require(dlfoo2data)
+require(Biobase)
+
+require(alluvial)
+require(RColorBrewer)
+require(ggpmisc)
+require(gridExtra)
+require(grid)
+require(gplots)
+require(ggplot2)
+require(plotly)
+
+require(reshape2)
+require(dplyr)
+options(dplyr.width = Inf)
+require(tibble)
+require(tidyverse)
+require(tidyr)
+
+require(DESeq2)
+
+setwd("~/Scripts/axlab/SHINY_AXLAB/")
+
+
+
+fix.dups.foo <- function(x){
+   x.out <- x
+   y = unique(x[duplicated(x)])
+   for(i in 1:length(y)){
+      ii <- which(x==y[i])
+
+      x.out[ii[-1]] <- paste(y[i], 1:length(ii[-1]),sep=".")
+   }
+   return(x.out)
+}
+
+
+## :::::::::::::::::::::::::::
+##    NOTE ON DATA SETS
+## ::::::::::::::::::::::::::::
+
+# Need to be BioBase expression sets eSet
+# Gene info (fData) columns must include.
+# + ENSG - enseble gene ids. no
+# + SYMBOL - gene ymbols. no duplicates accepted.
+# The ENSG must be used as featureNanmes, i.e. the rownames of the object.
+# sample info,  'pData(eset)' must useL
+# 'sample_id' as primary identifier'sampleNames(eset)', i.e. column in pData sheet, rownames for the pdata, and colnames for the data matrix
+
+
+# for each data set - add a 'group' annoations for samples. This will be the primary annotation
+# also add $sample_order  to have at least one numeric sample annotation
+
+
+
+
+## :::::::::::::::::::::::::::
+##    MAZHAAR DATA
+## ::::::::::::::::::::::::::::
+## load data stored in dlfoo2 package
+##
+
+tds <- readRDS(file = 'Data/2021_51_DataMatrix_proteicoding_rlog_transformed.rds') ## deseq2 rlog transformed data object
+pdata_mazhar <- data.frame(colData(tds))
+
+es_mazhar <- esetCreate(data = as.matrix(assay(tds)), pdata = pdata_mazhar, fdata = as.data.frame(rowData(tds)))
+
+## pdata
+str(pData(es_mazhar))
+
+
+## pdata sample_order
+pData(es_mazhar)$sample_order <- 1:nrow(pData(es_mazhar))
+pData(es_mazhar)$group
+
+## fdata
+fdata <- fData(es_mazhar) %>% dplyr::select(ENSG, SYMBOL)
+stopifnot(!any(duplicated(fdata$ENSG)))
+table(duplicated(fdata$SYMBOL))
+fData(es_mazhar) <- fdata
+
+
+## addons
+centroid_mazhar <- esetGroupMeans(es_mazhar, annot=pdata_mazhar$annot)
+
+
+
+
+
+
+## :::::::::::::::::::::::::::
+##    CCLE DATA
+## ::::::::::::::::::::::::::::
+
+
+ccle = readRDS(file="Data/ccle_1156set_rpkm_DepMap_18q3_20180718_log2.rds")
+sampleNames(ccle)
+
+## pdata
+pdata_ccle  <- pData(ccle)
+identical(pdata_ccle$id, sampleNames(ccle))
+table(duplicated(pdata_ccle$CCLE.id))
+pdata_ccle <- pdata_ccle %>%
+   dplyr::mutate(sample_id = paste(tissue, CCLE.id, sep = "_")) %>%
+   dplyr::select(sample_id, everything())
+sampleNames(ccle) <- pdata_ccle$sample_id
+
+
+
+## pdata sample order
+
+pData(ccle) <- pdata_ccle
+pData(ccle)$sample_order <- 1:nrow(pData(ccle))
+pData(ccle)$group <- pData(ccle)$sample_type
+
+rm(pdata_ccle)
+
+
+## fdata
+fdata <- fData(ccle) %>% dplyr::select(ENSG, SYMBOL)
+stopifnot(!any(duplicated(fdata$ENSG)))
+
+## Fix duplicate gene symbols in data sets !!!
+## ducpliate SYMBOLs may be present even though unique ENSG. add .2 to duplicated SYMBOLS to all data sets.
+table(duplicated(fdata$SYMBOL))
+fdata$SYMBOL <- fix.dups.foo(fdata$SYMBOL)
+stopifnot(!duplicated(fdata$SYMBOL))
+fData(ccle) <- fdata
+ccle
+
+
+
+
+
+## :::::::::::::::::::::::::::::::::::::::::::::
+##    LOAD TCA DATA from dlfoo2data packages
+## ::::::::::::::::::::::::::::::::::::::::::::::
+## load data stored in dlfoo2 package
+   data("pan_gdc", package="dlfoo2data")
+   data("rcc_nt", package="dlfoo2data")
+   data("rcc_t", package="dlfoo2data")
+   #data("tcga_surv_tab", package="dlfoo2data"
+   data("shape_subtypes", package="dlfoo2")
+   data("color_subtypes", package="dlfoo2") ## color annotation object
+   data("color_annotations", package="dlfoo2")
+
+
+
+
+
+# :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+#      PDATA SOURCE
+# :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+   # For tcga data a sample phenotype pdata object is crunched and curated and then added to the
+
+
+pdata_source <- as.data.frame(dlfoo2::pdata_panCanFull)
+pdata_source <- pdata_source %>% droplevels()
+   # %>% mutate(tax_simp3 = as.character(tax_simp2)) %>%  mutate(tax_simp3 = if_else(is.na(tax_simp3) & grepl("-NT", sample_type2), "kidney_n", tax_simp3)) %>% mutate(tax_simp3 = factor(tax_simp3, levels=c("kidney_n", levels(tax_simp2))))
+   # tax_simp3 = all normals annotated
+
+# removve tumor specific annotations from the matched normal  samples
+u <- grepl("-NT", pdata_source$sample_type2)
+pdata_source$purity[u] <- NA
+pdata_source$ploidy[u] <- NA
+pdata_source$Cancer.DNA.fraction[u] <- NA
+pdata_source$Subclonal.genome.fraction[u] <- NA
+
+
+
+
+ ## Lindgren/Axelson taxonomy version 203 table (Sept 16 2020) - Some minor corrections. prcc_c removed completely and Cimp subgroups removed (the ones called just by cimp-score)
+   ## ---------------------
+   df_ds <- read.delim("Data/retax_2020_table_v203.txt", as.is=T)
+   str(df_ds)
+   pdata_source <- dplyr::left_join(pdata_source, df_ds)
+   table(pdata_source$taxonomy_published)
+   table(pdata_source$tax203)
+   table(pdata_source$tax203sub)
+   colnames(pdata_source)
+
+   pdata_source_temp <- pdata_source %>%
+         dplyr::select(-c(tax_dl, tax_simp,  TaxComments)) %>% # tax_simp2, tax_simp3,
+         mutate(x = tax203) %>%
+         mutate(x = if_else(as.character(sample_type2)=="BLCA-NT", "bladder_n", x)) %>%
+         mutate(x = if_else(!is.na(x), x, as.character(taxonomy_published))) %>%
+         mutate(x = factor(x, levels=c(
+            "crtx","crtmed","med","infl1","infl2",
+            "ccRCC", "ccRCC_inf",
+            # "ccRCC_SMARCA4",
+            # "ccRCC_TCEB1","ccRCC_Fibromuscular",
+            "ccpRCC",
+            "chRCC","chONC","pONC",
+             "pRCC_a",  "pRCC_b" ,
+            "tRCC",
+            "RCC_FH",
+            "sRCC", "MA","MTSCC",
+            "muRCC",
+            #"outlier", "outlier_atypic","outlier_tfe","outlier_cystic","outlier_cimp","outlier_inf",
+            "bladder_n","Urobasal","GU","Basal/SCCL","SC/NE","Mes-Inf","Inf_other"))) %>%
+         mutate(y = tax203sub) %>%
+            mutate(y = if_else(as.character(sample_type2)=="BLCA-NT", "bladder_n", y)) %>%
+            mutate(y = if_else(!is.na(y), y, as.character(x))) %>%
+            mutate(y= factor(y, levels=c(
+               "crtx","crtmed","med","infl1","infl2",
+               "ccRCC_a","ccRCC_b","ccRCC_c","ccRCC_d",
+               "ccRCC_inf",  "ccRCC_TCEB1",
+               # "ccRCC_SMARCA4",
+               # "ccRCC_Fibromuscular",
+               "ccpRCC",
+               "chRCC_a","chRCC_b","chRCC_c",
+               "chONC","pONC",
+                "pRCC_a", "pRCC_b" ,
+               # "pRCC_t", "tfeRCC",
+               "tRCC_tfe3","tRCC_tfeb","tRCC_like",
+               "RCC_FH_mut","RCC_FH_wt",
+               "sRCC", "MA","MTSCC",
+               "muRCC","potential_swap",
+               #"outlier", "outlier_atypic","outlier_tfe","outlier_cystic","outlier_cimp","outlier_inf",
+               "bladder_n","Urobasal","GU","Basal/SCCL","SC/NE","Mes-Inf","Inf_other"))) %>%
+         dplyr::rename(tax_simp = x) %>%
+         dplyr::rename(tax = y)
+         #mutate(y = recode(y, "crtmed"="kidney_n", "crtx"="kidney_n", "med"="kidney_n", "infl1"="kidney_n", "infl2"="kidney_n")) %>%
+
+
+
+   table(pdata_source_temp$tax, pdata_source_temp$taxonomy_published, useNA="always")
+
+   pdata_source_temp <- pdata_source_temp %>%
+         #mutate(tax_simp2 = recode_factor(tax_simp, !!!unlist(recode.key))) %>%
+         mutate(tax_simp2 = factor(tax_simp, levels=c(
+            "crtx","crtmed","med","infl1","infl2",
+            "ccRCC", "ccRCC_inf",
+            # "ccRCC_SMARCA4","ccRCC_Fibromuscular",
+            # "ccRCC_TCEB1",
+            "ccpRCC",
+            "chRCC","chONC","pONC",
+             "pRCC_a",  "pRCC_b",
+            "tRCC",
+            "RCC_FH",
+            "sRCC", "MA","MTSCC",
+            "muRCC",
+            #"outlier", "outlier_atypic","outlier_tfe","outlier_cystic","outlier_cimp","outlier_inf",
+            "bladder_n","Urobasal","GU","Basal/SCCL","SC/NE","Mes-Inf","Inf_other")))
+   table(pdata_source_temp$tax_simp, pdata_source_temp$tax_simp2, useNA="always")
+   pdata_source <- pdata_source_temp
+
+   pdata_source$tax_simp3 <- pdata_source$tax_simp2
+   pdata_source$tax_simp3[!c(pdata_source$tax_simp3 %in% c("crtx","med","ccRCC","ccpRCC","chRCC","chONC","pONC","pRCC_a", "pRCC_b" , "tRCC","RCC_FH","sRCC"))] <- NA
+   pdata_source$tax_simp3 <- droplevels(pdata_source$tax_simp3 )
+   table(pdata_source$tax_simp3)
+
+   table(pdata_source$tax_simp2)
+
+   ## end lindgren taxonomy
+
+
+
+   ## Fix some pdata columns to bve interpreted as text
+   pdata_source <- pdata_source %>%
+      mutate_at(vars(Genome.doublings, OS, DSS, PFI), ~as.character(.))
+
+
+   ## Generate pdata_panCanGex
+   ## pan cancer pdata object
+   pdata_panCanGex <- pdata_source %>% dplyr::filter(platform =="IlluminaHiSeq_RNASeqV2") %>% dplyr::filter(sample_id %in% sampleNames(pan_gdc))
+   pdata_panCanGex <- pdata_panCanGex[match(sampleNames(pan_gdc), pdata_panCanGex$sample_id),]
+
+   # pdata_rccGex <- pdata_panCanGex %>% dplyr::filter(sample_id %in% sampleNames(rcc_nt)) %>%
+
+
+   #dplyr::filter(!c(tax_simp %in% c("Urobasal","GU")))
+   #str(pdata_rccGex)
+
+
+
+   ## Final compilation of the TCGA expressionsets
+   ## --------------------------------------------
+
+
+   ## rcc tumors only
+   pdata_rcc <- pdata_panCanGex %>% dplyr::filter(sample_id %in% sampleNames(rcc_t)) %>% dplyr::filter(!is.na(tax))
+   rcc_t <- rcc_t[,pdata_rcc$sample_id]   # assayData: 19676 features, 880 samples
+   pData(rcc_t) <- pdata_rcc
+   pData(rcc_t)$sample_order <- 1:nrow(pData(rcc_t))
+   pData(rcc_t)$group <- pData(rcc_t)$tax_simp2  %>% droplevels()
+
+   #@ rcc_nt kidney tumors and normals
+   pdata_rcc_nt <- pdata_panCanGex %>% dplyr::filter(sample_id %in% sampleNames(rcc_nt)) %>% dplyr::filter(!is.na(tax))
+   rcc_nt <- rcc_nt[,pdata_rcc_nt$sample_id]   # assayData: 19676 features, 880 samples
+   pData(rcc_nt) <- pdata_rcc_nt
+   pData(rcc_nt)$sample_order <- 1:nrow(pData(rcc_nt))
+   pData(rcc_nt)$group <- pData(rcc_nt)$tax_simp2  %>% droplevels()
+   table(pData(rcc_nt)$group)
+
+   # pancancer tcga
+   pan_gdc
+   pdata_panCanGex <- pdata_panCanGex %>% dplyr::filter(sample_id %in% sampleNames(pan_gdc))
+   pan_gdc <- pan_gdc[,pdata_panCanGex$sample_id]   # assayData: 19676 features, 880 samples
+   pData(pan_gdc) <- pdata_panCanGex
+   pData(pan_gdc)$sample_order <- 1:nrow(pData(pan_gdc))
+   pData(pan_gdc)$group <- factor(pData(pan_gdc)$sample_type2)  %>% droplevels()
+   table(pData(pan_gdc)$group)
+
+
+
+
+
+
+
+
+## select columns
+
+   #my_cols1 <- c("Taxonomies","TCGA","Mutation call Chen",  "PanCan ABSOLUTE - DNA SNP array and mutation",  "PanCan Clinical"
+   #              ,"Chen 2016 RCC taxonomy","chRCC TCGA paper Davis 2014 ","Zhao et al FGFR2")
+   #my_cols2 <- c("Pathway score DL","Pathway score Chen","PanCan Cibersort - RNAseq signature","PanCan ABSOLUTE - DNA SNP array and mutation","DL_2020_FGFR2","DL_2020_Methylation","PanCan Clinical","HIF_score","HNF_score")
+
+
+
+
+
+## ----------------------------
+##  LOAD COLOR CODINGS
+## ----------------------------
+
+   # get tcga & pancan tumor color codes
+   pancan_colors <- read.delim("Data/PanCanAtlasTumors_color_coded_by_organ_system_20170302.tsv", as.is=T)
+   u <- match(pancan_colors$Study.Abbreviation, names(color_subtypes))
+   color_subtypes[u] <- pancan_colors$Hex.Colors
+
+   temp_vec <- c("#006699","goldenrod2")
+   names(temp_vec) <- c("KIRC-TAP", "KIRP-TAP")
+   color_subtypes <- c(color_subtypes, temp_vec)
+
+   myfile <- "Data/retax_2020_colorTable.txt"
+   retax_colors <- read.delim(myfile, as.is=T)$color
+   names(retax_colors) <- read.delim(myfile, as.is=T)$name
+   color_subtypes <- c(retax_colors, color_subtypes)
+   color_subtypes["Rest"] <- "gray"
+
+   match(levels(pdata_source$tax), names(color_subtypes))
+
+   retax_shape <- read.delim("Data/retax_2020_colorTable.txt", as.is=T)$shape
+   names(retax_shape) <- read.delim("Data/retax_2020_colorTable.txt", as.is=T)$name
+   shape_subtypes <- c(retax_shape, shape_subtypes)
+
+   myfile <- "Data/mutation_variants_colorTable.txt"
+   variant_colors <- read.delim(myfile, as.is=T)$color
+   names(variant_colors) <- read.delim(myfile, as.is=T)$name
+
+
+   ## color_annotations
+   color_subtypes <- c(color_subtypes, color_annotations, variant_colors)
+
+
+
+
+
+## ----------------------------
+##  LOAD TRANSCRIPTION FACTORS
+## ----------------------------
+
+tf_df <- read.delim("Data/Human Transcription Factors Cell 2018.txt", as.is=T)
+head(tf_df)
+tf_df <- tf_df %>% dplyr::rename(ENSG=ID, SYMBOL=Name) %>% dplyr::filter(is.TF=="Yes")
+rownames(tf_df) <- tf_df$ENSG
+my_ensg <- intersect(rownames(tf_df), featureNames(rcc_nt))
+tf_df <- tf_df[my_ensg,]
+
+
+
+
+
+## ----------------------
+##    LOAD SIGNATURES
+## ----------------------
+
+## add signatrures MSig Pathway Lists
+## -----------------------------------
+my_ontologies = c("h.all","c2.cp.biocarta","c2.cp.kegg","c2.cp.reactome","c3.tft","c5.bp","c5.cc","c5.mf")
+pathway_files <- list.files("Data/msigdb_v7.0_GMTs/", pattern="symbols_pathwayList.rds", full.names = T)
+pathway_files <- pathway_files[apply(sapply(my_ontologies, function(x) grepl(x, pathway_files)),1, any)]
+my_pathways <- sapply(pathway_files, function(x) readRDS(x))
+my_pathways <- unlist(my_pathways, recursive = FALSE)
+
+
+# Kidney varying genes from Lindgren 2017 -& Signatures
+annot.topVar.HCA <- read.delim("Data/Limma_nVar708_allCombos_Grps_fit2_results_HCA.tree_Tumors_Pearson.txt", as.is=T)
+
+cc.tab <- annot.topVar.HCA[which(annot.topVar.HCA$my.k.classes %in% c(4,5)),]
+fox.tab <- read.delim("Data/FOXI1_correlation_rcc.t.txt", as.is=T)
+# h_all <- clusterProfiler::read.gmt("Data/msigdb_v7.0_GMTs/h.all.v7.0.symbols.gmt")
+hippo_sig <- read.delim("Data/Hippo_Signature_Mehra2016.txt", as.is=T)
+hippo_sig$ENSG <- gsub("[.].*","", hippo_sig$Gene_ID)
+
+
+
+
+## Kdiney -  published gene signatures & pathway
+kidney_pathways <- readRDS("Data/msig_kidney_list_gmt.rds")
+names(kidney_pathways)
+
+## SCENIC Regulons (tax_simp2)
+scenic_regulons <- readRDS("Data/SCENIC_RCC_regulons.rds")
+names(scenic_regulons)
+
+
+
+
+
+# #my_samples <- sampleNames(pan_gdc)
+#
+# sig_df <- data.frame(sample_id = sampleNames(pan_gdc), row.names = sampleNames(pan_gdc), stringsAsFactors = F)
+# sig_df$HNF_score <- apply(exprs(pan_gdc[fData(pan_gdc)$SYMBOL %in% cc.tab$SYMBOL, ]), 2, mean)
+# sig_df$HNF_score <- sig_df$HNF_score-mean(sig_df$HNF_score)
+# sig_df$HIF_score <- apply(exprs(pan_gdc[ fData(pan_gdc)$SYMBOL %in% as.character(unlist(my_pathways[ grep("HALLMARK_HYPOXIA", names(my_pathways))])), ] ), 2, mean)
+# sig_df$HIF_score <- sig_df$HIF_score-mean(sig_df$HIF_score)
+# sig_df$FOXI1_score <- apply(exprs(pan_gdc[fData(pan_gdc)$SYMBOL %in% fox.tab$SYMBOL[1:26], ]), 2, mean)
+# sig_df$FOXI1_score <- sig_df$FOXI1_score-mean(sig_df$FOXI1_score)
+# hippo_mat <- exprs(pan_gdc[fData(pan_gdc)$ENSG %in% hippo_sig$ENSG, ]) * as.numeric(factor(hippo_sig$Signature=="HIPPO_UP_SIG", labels = c(-1,1)))
+# sig_df$Hippo <- apply(hippo_mat, 2, mean)
+# sig_df$Hippo <- sig_df$Hippo-mean(sig_df$Hippo)
+# sig_df$MT_expr <- apply(exprs(pan_gdc[grep("MT-", fData(pan_gdc)$SYMBOL), ]), 2, mean)
+#
+# # pdata_source <- data.frame(pdata_source %>% dplyr::left_join(sig_df))
